@@ -1,0 +1,63 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Rebuild source archive
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'build-source\source.part.*' | Sort-Object Name
+          if ($parts.Count -ne 6) { throw "Expected 6 source parts, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes('source.zip', [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash 'source.zip' -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '7fa3f69ebe7de30cab976c39557b4222010df0c0d20dd026570520fccf5bb2e8') {
+            throw "Source archive hash mismatch: $hash"
+          }
+          Expand-Archive -Path 'source.zip' -DestinationPath 'source' -Force
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          Set-Location 'source\GoogleSitesContentOps-v1.1'
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Syntax check
+        shell: pwsh
+        run: |
+          Set-Location 'source\GoogleSitesContentOps-v1.1'
+          python -m compileall -q app main.py
+
+      - name: Build single EXE
+        shell: pwsh
+        run: |
+          Set-Location 'source\GoogleSitesContentOps-v1.1'
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GoogleSitesContentOps --collect-all selenium main.py
+          Copy-Item 'dist\GoogleSitesContentOps.exe' "$env:GITHUB_WORKSPACE\GoogleSitesContentOps.exe"
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoogleSitesContentOps-Windows-v1.1
+          path: GoogleSitesContentOps.exe
+          if-no-files-found: error
+          retention-days: 30
